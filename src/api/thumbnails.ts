@@ -5,6 +5,7 @@ import type { ApiConfig } from "../config";
 import type { BunRequest } from "bun";
 import { BadRequestError, NotFoundError, UserForbiddenError } from "./errors";
 import path from "path";
+import { randomBytes } from "crypto";
 
 type Thumbnail = {
   data: ArrayBuffer;
@@ -42,10 +43,7 @@ export async function handlerUploadThumbnail(cfg: ApiConfig, req: BunRequest) {
   if (!videoId) {
     throw new BadRequestError("Invalid video ID");
   }
-  const mimeType = req.headers.get('content-type')
-  if (mimeType !== "image/jpeg" && mimeType !== "image/png" ) {
-    throw new BadRequestError('Unsupported file')
-  }
+
   const token = getBearerToken(req.headers);
   const userID = validateJWT(token, cfg.jwtSecret);
 
@@ -59,19 +57,26 @@ export async function handlerUploadThumbnail(cfg: ApiConfig, req: BunRequest) {
   if (imageData.size > MAX_UPLOAD_SIZE) {
     throw new BadRequestError('Check your file size')
   }
-  const mediaType = imageData.type
+ 
+  const mimeType = imageData.type
+  if (mimeType !== "image/jpeg" && mimeType !== "image/png" ) {
+    throw new BadRequestError('Unsupported file')
+  }
   const arrayBuffer = await imageData.arrayBuffer()
-  const imageExtension = getExtensionFromMime(mediaType)
-  const assetPath = path.join(cfg.assetsRoot, `${videoId}.${imageExtension}`)
+  const imageExtension = getExtensionFromMime(mimeType)
+  const randomBuff = randomBytes(32);
+  const randomStringFileName = randomBuff.toString('base64url')
+  const assetPath = path.join(cfg.assetsRoot, `${randomStringFileName}.${imageExtension}`)
   await Bun.write(assetPath, arrayBuffer);
-
+  
   const videoMetadata = await getVideo(cfg.db, videoId)
   if(videoMetadata?.userID !== userID) {
     throw new UserForbiddenError('Access denied')
   }
+  // path.join is designed for system paths and not urls
   const url = new URL(req.url)
-  const baseUrl = `${url.protocol}/${url.host}`
-  const thumbnailUrl = path.join(baseUrl, assetPath)
+  const baseUrl = `${url.protocol}//${url.host}`
+  const thumbnailUrl = `${baseUrl}/assets/${randomStringFileName}.${imageExtension}`
   videoMetadata.thumbnailURL = thumbnailUrl
   await updateVideo(cfg.db, videoMetadata)
   return respondWithJSON(200, videoMetadata);
